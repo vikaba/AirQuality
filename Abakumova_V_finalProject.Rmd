@@ -1,0 +1,383 @@
+---
+title: Demographics and Air Quality by US Counties
+output: html_notebook
+---
+
+<h2> Introduction + Purpose </h2>
+<p> For this project, I wanted to create a linear regression model for different population demographics by US location and respective air quality in that location.
+This was very interesting to me because I am very interested in environmental discrimination such as environmental racism. Therefore, I wanted to know if factors such as poverty, race, and gender affect the air quality in respective areas because this could potentially point to a symptom of environmental discrimination. </p>
+
+<h2> Data Description + Sources </h2>
+<p> The data for poverty was in the form of percentage of people in poverty by US county. The racial data was organized by white, black, hispanic, asian, and native american percentages by US county. The gender data was male percentages by US county. The air quality data was organized by number of days data was recorded, the number of good, moderate, unhealthy, very unhealthy, and hazardous data.</p>
+<p> Because data was only available for all counties for 2010 for all of the variables I wanted in my model, that is the data I chose to use, even though it is not the most recent. </p>
+<p> The race and poverty by county data is from the US Census' Data Mapper tool.</p>
+<p> The poverty data is from the US Census' Small Area Income and Poverty Estimates tool.</p>
+<p> The air quality data is from the EPA yearly Air Quality Index Report (https://www.epa.gov/outdoor-air-quality-data/air-quality-index-report).</p>
+
+<h2> Data Reformatting/Parsing </h2>
+The air quality data contains features for the number of days the air quality was recorded and subsequently, the number of good, moderate, unhealthy, and hazardous air quality days. The number of days the quality was recorded for all of the counties is not necessarily the same. Therefore, the features for number of good, moderate, etc. days was converted to a percentage of number of days recorded. This was done in R before database storage. </p>
+```{r}
+# load the air quality data into a data frame with unnecessary data
+airQuality <- read.csv("/Users/vikaba/Documents/Documents/northeastern/second_year/DS4100/final_project/annual_aqi_by_county_2010.csv")[,c(-3,-7,-11:-19)]
+
+# convert all good, moderate, etc. day counts to percentages of days data was recorded
+for (i in 1:nrow(airQuality)) {
+  for (j in 4:8) {
+    airQuality[i,j] = (airQuality[i,j]/airQuality[i,3])*100
+  }
+}
+airQuality$State <- str_trim(as.character(airQuality$State))
+airQuality$County <- str_trim(as.character(airQuality$County))
+
+# export data back with the fixed air quality data
+write.csv(airQuality, "AirQualityFixed.csv", row.names = FALSE)
+```
+<p> The racial percentages were all in different tables. Before putting the data into the database, the race tables were combined into one table in Excel. </p>
+<p> The racial, gender, and poverty tables all had "County" after the county names while the air quality data didn't. In order to match up the data, "County" was deleted in those values. The poverty data also had state names as numbers and state initials in the county field. The initials were deleted and state numbers were converted to String names. This was all done in R before database storage </p>
+```{r}
+# load the race, gender, and poverty data into a data frame
+race <- read.csv("/Users/vikaba/Documents/Documents/northeastern/second_year/DS4100/final_project/percent_race.csv")[-1915,] # row 1915 has spanish spelling
+gender <- read.csv("/Users/vikaba/Documents/Documents/northeastern/second_year/DS4100/final_project/percent_male.csv")[-1915,] # row 1915 has spanish spelling
+poverty <- read.csv("/Users/vikaba/Documents/Documents/northeastern/second_year/DS4100/final_project/percent_poverty.csv")
+
+# delete all rows with states as Puerto Rico because the poverty data does not have Puerto Rico data
+gender <- gender[gender$State != "Puerto Rico",]
+race <- race[race$State != "Puerto Rico",]
+
+# format race and gender data to not have "County" in the county name field
+library(stringr)
+gender$State <- as.character(gender$State)
+gender$County <- as.character(gender$County)
+race$State <- as.character(race$State)
+race$County <- as.character(race$County)
+for (i in 1:nrow(gender)) {
+  gender[i,2] <- gsub("County", "", gender[i,2])
+  gender[i,2] <- gsub("Borough", "", gender[i,2])
+  gender[i,2] <- str_trim(gsub("Census Area", "", gender[i,2]))
+  race[i,2] <- gsub("County", "", race[i,2])
+  race[i,2] <- gsub("Borough", "", race[i,2])
+  race[i,2] <- str_trim(gsub("Census Area", "", race[i,2]))
+}
+
+# format poverty data to not have state initials in county name and "County" and convert state numbers to state name
+statesAbbs <- data.frame(state.abb, state.name)
+statesAbbs$state.abb <- as.character(state.abb)
+statesAbbs$state.name <- as.character(state.name)
+poverty$State <- as.character(poverty$State)
+poverty$County <- as.character(poverty$County)
+for (i in 1:nrow(poverty)) {
+  state <- unlist(strsplit(poverty[i,2], "[()]"))[2]
+  poverty[i,1] <- statesAbbs[match(state, statesAbbs$state.abb),2]
+  poverty[i,2] <- gsub("County", "", poverty[i,2])
+  poverty[i,2] <- gsub("Census Area", "", poverty[i,2])
+  poverty[i,2] <- gsub("Borough", "", poverty[i,2])
+  getRidOfPars <- unlist(strsplit(poverty[i,2], "[(]"))[1]
+  poverty[i,2] <- str_trim(getRidOfPars)
+}
+
+# export data back with the fixed race, gender, and poverty data
+write.csv(race, "RaceFixed.csv", row.names = FALSE)
+write.csv(gender, "GenderFixed.csv", row.names = FALSE)
+write.csv(poverty, "PovertyFixed.csv", row.names = FALSE)
+```
+<h2> Database Storage </h2>
+<p>A relational SQL database was then created in my mySQL to store all values for air quality measurements and the demographic measurements by state.</p>
+<p>The database has tables for poverty, race, gender, citizenship, and air quality.</p>
+```{r}
+# install and load package to connect to mySQL
+#install.packages("RMySQL")
+library(RMySQL)
+
+# establish a connection with the local envi_model database
+driver <- dbDriver("MySQL")
+conn <-
+  dbConnect(driver,
+            user = "root",
+            pass = "1234",
+            dbname = "envi_model")
+```
+<p>There are multiple values for each state in the air quality data. Therefore, these values were aggregated by averaging in mySQL before joining all of the tables to create a master table.</p>
+<p>In order to create a predictive model, the tables in the database are all then joined to create a master table of demographics and air quality by state. </p>
+```{r}
+# aggregate the air quality table by state and average all of the values for each of the columns
+# join all of existing measuring tables by state
+query <-
+  dbSendQuery(
+    conn,
+    statement = "SELECT DISTINCT
+	air_quality.state,
+    air_quality.county,
+    poverty.poverty_percent,
+    gender.male_percent,
+    race.white_percent,
+    race.black_percent,
+    race.hispanic_percent,
+    race.asian_percent,
+    race.native_percent,
+    air_quality.good_days,
+    air_quality.moderate_days,
+    air_quality.unhealthy_days,
+    air_quality.very_unhealthy_days,
+    air_quality.hazardous_days
+FROM
+    (SELECT DISTINCT * FROM gender) AS gender,
+    (SELECT DISTINCT * FROM race) AS race,
+    (SELECT DISTINCT * FROM poverty) AS poverty,
+    (SELECT DISTINCT * FROM air_quality) AS air_quality
+WHERE
+	gender.state = gender.state AND
+    gender.state = race.state
+        AND gender.county = race.county
+        AND race.state = poverty.state
+		AND race.county = poverty.county
+        AND poverty.state = air_quality.state
+        AND poverty.county = air_quality.county
+ORDER BY air_quality.state"
+  )
+allData <- fetch(query, n=-1)
+write.csv(allData, "AllData.csv", row.names = FALSE)
+```
+<h2> Data Visualizations </h2>
+<p>Before creating a model for and evaluation the data, I used Tableau to create several visualizations that demonstrate some of the features by state and county as the data is interesting to visualize.</p>
+
+<img src = "/Users/vikaba/Documents/Documents/northeastern/second_year/DS4100/final_project/Poverty By State.png">
+<img src = "/Users/vikaba/Documents/Documents/northeastern/second_year/DS4100/final_project/White By State.png">
+<img src = "/Users/vikaba/Documents/Documents/northeastern/second_year/DS4100/final_project/Poverty vs Percent of White People per County.png">
+<p> As can be seen from this visualization, the smaller circles which represent a low percentage of white people, are mostly darker colored than the bigger circles, meaning they have a higher poverty percentage. </p>
+<img src = "/Users/vikaba/Documents/Documents/northeastern/second_year/DS4100/final_project/Good Days By State.png">
+
+<h2> Evaluating the Data </h2>
+
+<h4> Outliers </h4>
+<p>First, outliers were identified in the response variable of good days by seeing which values were about 3 standard deviations from the mean. </p>
+<p> Because this model deals with air quality data, I did not think it was necessary to omit these outliers. From looking at the outliers (of which there were only 8), the number of good days was low for those days because moderate or unhealthy days were high and I think that is important data to have. It also did not seem like these outliers were due to wrongful experimentation. </p>
+```{r}
+goodDaysMean <- mean(allData$good_days) # good days mean
+goodDaysStDev <- sd(allData$good_days) # good days st dev
+allData$stDevFromMean <- ((allData$good_days - goodDaysMean) / goodDaysStDev)
+
+# find any values in good days that are 3 or more standard deviations from the mean
+outliers <- allData[which(abs(allData$stDevFromMean) >= 3),]
+outliers
+```
+<h4> Distribution </h4>
+<p>The response variable of good days was then analyzed for normal distribution with a histogram.</p>
+```{r}
+hist(allData$good_days)
+```
+<p>A squared transform was then applied to the good days to normalize the good days variable.</p>
+```{r}
+# scatter plot of air quality good days data
+hist((allData$good_days)^2)
+
+# transform the average good days by square root
+allDataGoodDaysNormalized <- allData[,c(-1,-2,-11:-15)]
+allDataGoodDaysNormalized$good_days <- ((allData$good_days)^2)
+```
+<h4> ANOVA </h4>
+<p>ANOVA's were done to see if certain features alone were enough to predict the percentage of good days for a location. These were done for male percentage, white percentage, and poverty percentage.</p>
+<p>Then, ANOVA's were done to see if these features with other features present were a significant predictor variable.</p>
+
+<h5>Male Percentage Only</h5>
+```{r}
+# anova to see if male percentage alone is enough to predict number of good days
+aov.genderOnly <- aov(formula = good_days ~ male_percent, data = allDataGoodDaysNormalized)
+summary(aov.genderOnly)
+```
+<p> Because the p value is less than 0.05, male percentage alone is enough to predict number of good days. </p>
+
+<h5>White Percentage Only</h5>
+```{r}
+# anova to see if white percentage alone is enough to predict number of good days
+aov.whiteOnly <- aov(formula = good_days ~ white_percent, data = allDataGoodDaysNormalized)
+summary(aov.whiteOnly)
+```
+<p> Because the p value is less than 0.05, white percentage alone is enough to predict number of good days. </p>
+
+<h5>Poverty Percentage Only</h5>
+```{r}
+# anova to see if poverty percentage alone is enough to predict number of good days
+aov.povertyOnly <- aov(formula = good_days ~ poverty_percent, data = allDataGoodDaysNormalized)
+summary(aov.povertyOnly)
+```
+<p> Because the p value is greater than 0.05, poverty percentage alone is not enough to predict number of good days. </p>
+
+<h5>All Percentages to See if Poverty, Male, and White Percentages Significant Predictors</h5>
+```{r}
+# anova to see if poverty, white, and male percentages with other features are significant predictors
+aov.goodDaysAll <- aov(formula = good_days ~ ., data = allDataGoodDaysNormalized)
+summary(aov.goodDaysAll)
+```
+<p> The p values for male and white percentages are less than 0.05, making them significant predictors. The p value for poverty percentage is greater than 0.05, therefore it is not a significant predictor when all of the other features present </p>
+
+<h4> Scatter Plots </h4>
+<p> Scatter plots were also done to see if there was a linear regression relationship between gender, race, and poverty features and air quality numbers </p>
+
+<h5> Male Percentage vs Good Days </h5>
+```{r}
+scatter.smooth(allDataGoodDaysNormalized$male_percent, allDataGoodDaysNormalized$good_days)
+```
+<p> There does not seem to be a strong correlation between good days and percent of males. Good days seem to be constant when compared to percentage of males.</p>
+
+<h5> White Percentage vs Good Days </h5>
+```{r}
+scatter.smooth(allDataGoodDaysNormalized$white_percent, allDataGoodDaysNormalized$good_days)
+```
+<p> In this plot, the data seems scattered without a significant correlation between white percentage and good days.</p>
+
+<h5> Male Percentage vs Good Days </h5>
+```{r}
+scatter.smooth(allDataGoodDaysNormalized$poverty_percent, allDataGoodDaysNormalized$good_days)
+```
+<p> This plot also shows no significant correlation as the points are very scattered. </p>
+
+<h4> Spearman Rank and Pearson Moment Coefficients </h4>
+<p> Spearman and Pearson coefficients were also used to assess correlation between poverty, race, and gender percentages </p>
+
+<p> Before the tests were performed on these features, an effort was made to normalize them for better correlation coefficient testing. No transforms were made on any of the data. The poverty data was relatively normally distributed. The race and gender data was skewed but did not respond well to transforms. </p>
+
+<h5> Pearson Moment Coefficient: percent male and number of good air quality days</h5>
+```{r}
+cor(allDataGoodDaysNormalized$good_days, allDataGoodDaysNormalized$male_percent, method = "pearson")
+```
+<h5> Spearman Rank Coefficient: percent male and number of good air quality days </h5>
+```{r}
+cor(allDataGoodDaysNormalized$good_days, allDataGoodDaysNormalized$male_percent, method = "spearman")
+```
+<h5> Pearson Moment Coefficient: percent white and number of good air quality days </h5>
+```{r}
+cor(allDataGoodDaysNormalized$good_days, allDataGoodDaysNormalized$white_percent, method = "pearson")
+```
+<h5> Spearman Rank Coefficient: percent white and number of good air quality days </h5>
+```{r}
+cor(allDataGoodDaysNormalized$good_days, allDataGoodDaysNormalized$white_percent, method = "spearman")
+```
+<h5> Pearson Moment Coefficient: percent poverty and number of good air quality days </h5>
+```{r}
+cor(allDataGoodDaysNormalized$good_days, allDataGoodDaysNormalized$poverty_percent, method = "pearson")
+```
+<h5> Spearman Rank Coefficient: percent poverty and number of good air quality days</h5
+```{r}
+cor(allDataGoodDaysNormalized$good_days, allDataGoodDaysNormalized$poverty_percent, method = "spearman")
+```
+<p> For all of the features evaluated, the Spearman Rank and Pearson Moment coefficients are relatively close to each other. This means that outliers do not seem to be having an effect on the data. However, all of the coefficients are very low and significantly below 0.8. Because none of the coefficients are 0, there seems to be some correlation between these features and the number of good air quality days, but not enough to say that there is significant correlation.
+There is the least correlation between percent poverty and good air quality and the most correlation between percent of males and good air quality. None of these correlations, however, are strong.</p>
+
+<p> The race and gender data is also not normally distributed which may be affecting the correlation coefficients. However, because the Spearman Rank and Pearson Moment coefficients for these 2 features were relatively close, the distribution does not seem to be significantly affecting the correlation coefficients </p>
+
+<h2> Building the Model(s) </h2>
+<p>The desired model for this dataset is a multiple linear regression model with some response variable dealing with the number of days of a certain air quality.
+
+<h4> Model with Good Days as Response Variable </h4>
+<p> The first model has the good days as a response variable.</p>
+<p> The data was first randomly split up 50-50 into a training and validation sets.</p>
+```{r}
+# training data set: random half of the data
+training <- allDataGoodDaysNormalized[sample(nrow(allDataGoodDaysNormalized), nrow(allDataGoodDaysNormalized) / 2),]
+
+# test data set: the other half of the data
+test <- allDataGoodDaysNormalized[-c(as.numeric(rownames(training))),]
+```
+<p> To create a multiple linear regression model, backward fitting was used and features with p values > 0.05 were removed at each step. </p>
+```{r}
+# linear regression model using training data and backward fitting, only keeping p values < 0.05
+goodDaysModel <- lm(formula = good_days ~ .-(hispanic_percent+poverty_percent+asian_percent+black_percent), data = training)
+summary(goodDaysModel)
+```
+<p> Next, using the test data set was used to judge the accuracy of the model by calculating the prediction accuracy with the predicted values for the test data set. AIC and BIC calculations were also performed as they are good measures for model selection, in case other models are created for this data. </p>
+```{r}
+# reverse the transform of the data and make predictions based on that data
+testUnnormalized <- test
+testUnnormalized$good_days <- allData[-c(as.numeric(rownames(training))),c("good_days")]
+goodDaysPreds <- predict(goodDaysModel, testUnnormalized)
+
+# data frame of actual values vs predicted values
+actuals_preds_good <- cbind(data.frame(actuals = testUnnormalized$good_days, predicteds = goodDaysPreds))
+
+# prediction accuracy
+correlation_accuracy <- cor(actuals_preds_good)
+paste("Prediction Accuracy: ", correlation_accuracy[1,2] * 100, "%", sep="")
+
+# fit AIC and BIC calculations
+paste("AIC:", AIC(goodDaysModel))
+paste("BIC:", BIC(goodDaysModel))
+```
+Using the training and test data set to calculate the prediction accuracy, the model was correct about 39% of the time.
+
+<h4> Model with Combo of Good and Moderate Days as Response Variable </h4>
+<p> To create this model, the sum of good and moderate days was taken to create the feature of acceptable air quality days. </p>
+```{r}
+allDataSumGoodModerate <- allData[,-15]
+
+# create acceptable days feature
+allDataSumGoodModerate$acceptable_days <- allData$good_days + allData$moderate_days
+
+# only leave acceptable days feature in and omit out the rest of the air quality and state and county features
+allDataSumGoodModerate <- allDataSumGoodModerate[,c(-1,-2,-10:-14)]
+```
+<p> Then, outliers were identified again in the same method of standard deviation from the mean as the last model. Once again, I decided to leave these outliers in for more accurate data and because I believe this data is significant for analysis </p>
+```{r}
+acceptableDaysMean <- mean(allDataSumGoodModerate$acceptable_days) # acceptable days mean
+acceptableDaysStDev <- sd(allDataSumGoodModerate$acceptable_days) # acceptable days st dev
+
+# find any values in good days that are 3 or more standard deviations from the mean
+allDataSumGoodModerate$stDevFromMean <- ((allDataSumGoodModerate$acceptable_days - acceptableDaysMean) / acceptableDaysStDev)
+
+allDataSumGoodModerate[which(abs(allDataSumGoodModerate$stDevFromMean) >= 3),]
+
+# omit the standard dev from mean columns for model creation
+allDataSumGoodModerate <- allDataSumGoodModerate[,-9]
+```
+<p> A histogram was then used to see the distribution of the response variable.</p>
+<p> Because none of the transform had a significant effect on the distribution of the heavily right skewed data, the data was left as is. </p>
+```{r}
+hist(allDataSumGoodModerate$acceptable_days)
+```
+<p> The data was then once again randomly split up 50-50 into training and test data sets. </p>
+
+```{r}
+# training data set: random half of the data
+trainingAcceptableDays <- allDataSumGoodModerate[sample(nrow(allDataSumGoodModerate), nrow(allDataSumGoodModerate) / 2),]
+
+# test data set: the other half of the data
+testAcceptableDays <- allDataSumGoodModerate[-c(as.numeric(rownames(training))),]
+```
+<p> Then, to create a multiple linear regression model, backward fitting was again used and features with p values > 0.05 were removed at each step. </p>
+```{r}
+# linear regression model using training data and backward fitting, only keeping p values < 0.05
+acceptableDaysModel <- lm(formula = acceptable_days ~ .-(poverty_percent+male_percent), data = trainingAcceptableDays)
+summary(acceptableDaysModel)
+```
+<p> Next, using the test data set was used to judge the accuracy of the model by calculating the prediction accuracy with the predicted values for the test data set. AIC and BIC calculations were also performed as they are good measures for model selection, in case other models are created for this data. </p>
+```{r}
+acceptableDaysPreds <- predict(acceptableDaysModel, testAcceptableDays)
+
+# data frame of actual values vs predicted values
+actuals_preds_acceptable <- cbind(data.frame(actuals = testAcceptableDays$acceptable_days, predicteds = acceptableDaysPreds))
+
+# prediction accuracy
+correlation_accuracy <- cor(actuals_preds_acceptable)
+paste("Prediction Accuracy: ", correlation_accuracy[1,2] * 100, "%", sep="")
+
+# fit AIC and BIC calculations
+paste("AIC:", AIC(acceptableDaysModel))
+paste("BIC:", BIC(acceptableDaysModel))
+```
+Using the training and test data set to calculate the prediction accuracy, the model was correct about 24% of the time.
+
+<h2> Evalulation of Models </h2>
+
+<h4> Model 1: Good Days as Response Variable </h4>
+<p> Overall, this model is not a very good measure for predicting the percentage of good air quality days a location will have. Both the multiple R squared and the adjusted R squared are very low and are significantly below 0.7. This means that the variation of good air quality days is not significantly explained by this model. The calculated MAD for this model is 28.66 which is not very close to 0, meaning there is a significant amount of deviation in this model. The model is statistically significant because the p-values for each feature as well as the overall model p-value are well below 0.05.
+
+<h4> Model 2: Good+Moderate Days as Response Variable </h4>
+<p> This model is also not a great measure for predicting the percentage of acceptable days (that is, good and moderate days). The multiple R squared and the adjusted R sqaures are even lower in this model than the previous model. This means that even less variation in the acceptable air quality days is described by this model than the previous model. The calculated MAD for this model, however, is 0.074, which is much closer to 0 than the previous model. Meaning that there is much less deviation in this model than the previous model. This makes sense because outside of the 15 outliers, the percentage of acceptable days was mostly around 90%. This model is also statistically significant with overall and individual feature p-values well below 0.05. The AIC and BIC of this model are also much lower than the previous model, meaning this model is more likely to be the true model and is closer to the truth.</p>
+
+<h2> Conclusion </h2>
+<p> Overall, I hypothesized that building a model with these above demographic features would be a good predictor for air quality is US locations. However, from the two models I have built and the data I aggregated, this does not seem to be the case. </p>
+<p> There are a few reasons why this was the result: </p>
+<ul>
+  <li> <p> There is not enough air quality data. While there were around 3,000 records from the census demographic data, there were only about 1,000 records for the air quality data. This means that areas that could have contributed to a more successful model did not have air quality recorded. </p> </li>
+  <li> <p>The correlation actually does not exist. I do not believe this is the case, because it has been shown that the correlation exists for water quality and the many environmental racism cases in the US.</p></li>
+  <li> <p>The 2010 data is too old and in 2010, air quality was not dependent on any demographics. I don't, however, think this was the case as 2010 was only 7 years ago. </p></li>
+</ul>
