@@ -1,7 +1,7 @@
 # AirQuality
 
 This is the project I created for my Fall 2017 DS4100 class. Below are all of the steps I took in the project.
-The actual code is contained in the R notebook in this repository.
+The actual code is contained in the R notebook in this repository. A video presentation of this project can be found <a href="https://youtu.be/zO5I3hTOqkI">here</a>.
 
 <h2> Introduction + Purpose </h2>
 <p> For this project, I wanted to create a linear regression model for different population demographics by US location and respective air quality in that location.
@@ -21,11 +21,11 @@ This was very interesting to me because I am very interested in environmental di
 <h2> Data Visualizations </h2>
 <p>Before creating a model for and evaluation the data, I used Tableau to create several visualizations that demonstrate some of the features by state and county as the data is interesting to visualize.</p>
 
-<img src = "Poverty By State.png">
-<img src = "White By State.png">
+<img src = "Poverty by State.png">
+<img src = "White by State.png">
 <img src = "Poverty vs Percent of White People per County.png">
 <p> As can be seen from this visualization, the smaller circles which represent a low percentage of white people, are mostly darker colored than the bigger circles, meaning they have a higher poverty percentage. </p>
-<img src = "Good Days By State.png">
+<img src = "Good Days by State.png">
 
 <h2> Evaluating the Data </h2>
 
