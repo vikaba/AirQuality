@@ -1,4 +1,4 @@
-# AirQuality
+# Air Quality and Population Demographics in the US
 
 This is the project I created for my Fall 2017 DS4100 class. Below are all of the steps I took in the project.
 The actual code is contained in the R notebook in this repository or can be along the description of the steps by downloading the html output of the R notebook from the repository. A video presentation of this project can be found <a href="https://youtu.be/zO5I3hTOqkI">here</a>.
